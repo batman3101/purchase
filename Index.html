@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 'Stylesheet.html' 파일의 CSS를 여기에 포함시킵니다. -->
+    <?!= include('Stylesheet'); ?>
+    <base target="_top">
+</head>
+<body>
+    <div class="grid-container">
+        <!-- ===== Header ===== -->
+        <header class="header">
+            <div class="header-left">
+                <!-- 모바일용 메뉴 토글 버튼 -->
+                <button id="mobile-nav-toggle" class="btn-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <h2 id="page-title">대시보드</h2>
+            </div>
+            <div class="header-right">
+                <!-- (옵션) 사용자 프로필 등 -->
+            </div>
+        </header>
+
+        <!-- ===== Sidebar ===== -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h3>구매 관리</h3>
+            </div>
+            <nav class="sidebar-nav">
+                <!-- (스크린샷 image_573dff.png 기준) -->
+                <a href="#" class="nav-link active" data-page="대시보드">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                    <span>대시보드</span>
+                </a>
+                <a href="#" class="nav-link" data-page="구매 내역">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                    <span>구매 내역</span>
+                </a>
+                <a href="#" class="nav-link" data-page="구매 등록">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                    <span>구매 등록</span>
+                </a>
+                <a href="#" class="nav-link" data-page="PO 관리">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+                    <span>PO 관리</span>
+                </a>
+                <a href="#" class="nav-link" data-page="거래명세서 관리">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+                    <span>거래명세서 관리</span>
+                </a>
+                <a href="#" class="nav-link" data-page="세금계산서 관리">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 19H14a2 2 0 0 1-2-2V7h-1a2 2 0 0 0-2 2v1H8a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-1h1a2 2 0 0 1 2 2v5.5a2.5 2.5 0 0 1-5 0V19a2 2 0 0 1-2-2v-1H6a2 2 0 0 0-2 2v1a2 2 0 0 0 2 2h1v-1"></path></svg>
+                    <span>세금계산서 관리</span>
+                </a>
+                <a href="#" class="nav-link" data-page="분석">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    <span>분석</span>
+                </a>
+                <a href="#" class="nav-link" data-page="공급사 관리">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    <span>공급사 관리</span>
+                </a>
+                <a href="#" class="nav-link" data-page="데이터베이스">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                    <span>데이터베이스</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- ===== Main Content ===== -->
+        <main class="main-content" id="content-wrapper">
+            <!-- 페이지 컨텐츠가 JavaScript에 의해 여기에 로드됩니다. -->
+        </main>
+    </div>
+
+    <!-- ===== Modals & Overlays (JavaScript.html이 사용) ===== -->
+
+    <!-- 1. Full-screen Spinner -->
+    <div id="spinner-overlay" class="overlay spinner-overlay">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- 2. Alert / Form Modal -->
+    <div id="modal-overlay" class="overlay modal-overlay">
+        <div class="modal-container">
+            <header class="modal-header">
+                <h3 id="modal-title">Modal Title</h3>
+                <button class="btn-icon" onclick="closeModal()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </header>
+            <div class="modal-body" id="modal-content">
+                <!-- 모달 컨텐츠(폼 또는 메시지)가 JavaScript에 의해 여기에 삽입됩니다. -->
+            </div>
+            <!-- 폼 내부의 <footer class="modal-footer">에 버튼이 동적으로 생성됩니다 -->
+        </div>
+    </div>
+    
+    <!-- 3. Confirm Modal (Delete) -->
+    <div id="confirm-overlay" class="overlay modal-overlay">
+        <div class="modal-container" style="max-width: 450px;">
+            <header class="modal-header">
+                <h3>확인</h3>
+            </header>
+            <div class="modal-body" id="confirm-content">
+                <p id="confirm-message">정말 삭제하시겠습니까?</p>
+            </div>
+            <footer class="modal-footer" style="justify-content: flex-end;">
+                <button id="confirm-cancel" class="btn btn-secondary">취소</button>
+                <button id="confirm-ok" class="btn btn-danger">확인</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- 'JavaScript.html' 파일의 스크립트를 여기에 포함시킵니다. -->
+    <?!= include('JavaScript'); ?>
+</body>
+</html>
+
+

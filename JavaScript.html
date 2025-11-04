@@ -1,0 +1,1266 @@
+<script>
+// --- 전역 변수 및 상수 ---
+// Code.gs의 SHEET_NAMES 객체와 동일하게 유지
+const SHEET_NAMES = {
+  HISTORY: "PurchaseHistory",
+  PO: "PO_List",
+  STATEMENTS: "Statements",
+  SUPPLIERS: "Suppliers",
+  TAX: "TaxInvoices",
+  DB: "ItemDatabase"
+};
+
+// 파일 업로드 관련 상수
+const FILE_UPLOAD_CONFIG = {
+  MAX_SIZE_MB: 10,
+  MAX_SIZE_BYTES: 10 * 1024 * 1024,  // 10MB in bytes
+  ALLOWED_TYPES: [
+    'application/pdf',
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/gif',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ]
+};
+
+// PO/Item 모달에서 사용할 아이템 데이터 캐시
+let poModalItemsData = [];
+let supplierMapData = {};
+
+
+/**
+ * 앱이 처음 로드될 때 실행되는 함수입니다.
+ */
+document.addEventListener("DOMContentLoaded", function() {
+    // 1. 기본 페이지(대시보드) 로드
+    loadPage("대시보드", document.querySelector(".nav-link.active"));
+
+    // 2. 사이드바 네비게이션 링크에 클릭 이벤트 추가
+    document.querySelectorAll(".sidebar-nav .nav-link").forEach(link => {
+        link.addEventListener("click", function(e) {
+            e.preventDefault(); // 기본 앵커 동작(#) 방지
+            
+            if (this.classList.contains("active")) {
+                return;
+            }
+
+            const pageTitle = this.dataset.page;
+            loadPage(pageTitle, this);
+            
+            if (window.innerWidth < 768) {
+                document.querySelector(".grid-container").classList.remove("sidebar-open");
+            }
+        });
+    });
+
+    // 3. 모바일 네비게이션 토글 버튼
+    document.getElementById("mobile-nav-toggle").addEventListener("click", function() {
+        document.querySelector(".grid-container").classList.toggle("sidebar-open");
+    });
+
+    // 4. 모달 창 닫기 이벤트 (오버레이 클릭 시)
+    const modalOverlay = document.getElementById("modal-overlay");
+    modalOverlay.addEventListener("click", function(e) {
+        if (e.target === modalOverlay) {
+            closeModal();
+        }
+    });
+
+    // 5. 폼 제출 이벤트 바인딩 (document 레벨 이벤트 위임)
+    // 모든 submit 이벤트를 document에서 처리하여 동적으로 생성된 폼도 처리
+    document.addEventListener("submit", function(e) {
+        console.log("📝 Submit event detected!");
+        console.log("Event target:", e.target);
+
+        // 처리할 폼 ID 확인
+        const formId = e.target.id;
+        console.log("Form ID:", formId);
+
+        // 우리가 처리하는 폼인 경우에만 기본 동작 방지
+        if (formId === 'purchase-form' ||
+            formId === 'supplier-form' ||
+            formId === 'po-form' ||
+            formId === 'item-db-form' ||
+            formId === 'upload-form-statement' ||
+            formId === 'upload-form-tax') {
+
+            console.log("✅ Form recognized, preventing default...");
+            e.preventDefault(); // 기본 폼 제출 방지
+
+            // 각 폼에 맞는 핸들러 호출
+            if (formId === 'purchase-form') {
+                console.log("→ Calling handlePurchaseFormSubmit");
+                handlePurchaseFormSubmit(e.target);
+            } else if (formId === 'supplier-form') {
+                console.log("→ Calling handleSupplierFormSubmit");
+                handleSupplierFormSubmit(e.target);
+            } else if (formId === 'po-form') {
+                console.log("→ Calling handlePOFormSubmit");
+                handlePOFormSubmit(e.target);
+            } else if (formId === 'item-db-form') {
+                console.log("→ Calling handleItemDBFormSubmit");
+                handleItemDBFormSubmit(e.target);
+            } else if (formId === 'upload-form-statement') {
+                console.log("→ Calling handleFileUpload (STATEMENT)");
+                handleFileUpload(e.target, 'STATEMENT');
+            } else if (formId === 'upload-form-tax') {
+                console.log("→ Calling handleFileUpload (TAX)");
+                handleFileUpload(e.target, 'TAX');
+            }
+        } else {
+            console.log("⚠️ Form ID not recognized:", formId);
+        }
+    });
+
+    // 6. 기타 이벤트 바인딩 (이벤트 위임)
+    const contentWrapper = document.getElementById("content-wrapper");
+    contentWrapper.addEventListener("input", function(e) {
+        // '구매 등록' 총액 자동 계산
+        if (e.target.id === 'reg-qty' || e.target.id === 'reg-price') {
+            const qty = document.getElementById('reg-qty').value || 0;
+            const price = document.getElementById('reg-price').value || 0;
+            document.getElementById('reg-total').value = qty * price;
+        }
+        // '구매 내역' 검색 필터
+        if (e.target.id === 'history-search') {
+            filterTable(e.target);
+        }
+    });
+
+    contentWrapper.addEventListener("click", function(e) {
+        // '분석' 페이지 탭 클릭
+        if (e.target.classList.contains('tab-link')) {
+            handleTabClick(e.target);
+        }
+        // PO/Item 모달의 동적 행 추가/삭제
+        if (e.target.classList.contains('add-po-item-row')) {
+            addPOItemRow();
+        }
+        if (e.target.classList.contains('add-item-supplier-row')) {
+            addItemSupplierRow();
+        }
+        if (e.target.classList.contains('remove-row-btn')) {
+            e.target.closest('.dynamic-row').remove();
+            // PO 모달인 경우 총액 업데이트
+            if (e.target.closest('#po-form')) {
+                updatePOTotal();
+            }
+        }
+    });
+
+    // PO 모달의 아이템 가격/합계 자동 계산
+    contentWrapper.addEventListener('change', function(e) {
+        if (e.target.classList.contains('po-item-name')) {
+            onPOItemSelect(e.target);
+        }
+        if (e.target.classList.contains('po-item-qty') || e.target.classList.contains('po-item-price')) {
+            updatePOTotal();
+        }
+    });
+});
+
+
+// --- 로딩 및 페이지 전환 ---
+
+function loadPage(pageTitle, linkElement) {
+    showSpinner();
+    document.getElementById("page-title").textContent = pageTitle;
+
+    document.querySelectorAll(".sidebar-nav .nav-link").forEach(link => {
+        link.classList.remove("active");
+    });
+    if (linkElement) {
+        linkElement.classList.add("active");
+    }
+
+    google.script.run
+        .withSuccessHandler(html => {
+            document.getElementById("content-wrapper").innerHTML = html;
+            hideSpinner();
+            // 페이지 로드 후 추가 작업
+            if(pageTitle === "구매 내역") {
+                bindHistorySearch(); // 검색 이벤트 바인딩
+            }
+        })
+        .withFailureHandler(error => {
+            document.getElementById("content-wrapper").innerHTML = `<p style="color:red;">페이지 로드 실패: ${error.message}</p>`;
+            hideSpinner();
+        })
+        .getPage(pageTitle);
+}
+
+function showSpinner() {
+    document.getElementById("spinner-overlay").style.display = "flex";
+}
+
+function hideSpinner() {
+    document.getElementById("spinner-overlay").style.display = "none";
+}
+
+// --- 커스텀 모달 (Alert/Confirm 대체) ---
+
+function showModal(title, contentHtml) {
+    document.getElementById("modal-title").textContent = title;
+    document.getElementById("modal-content").innerHTML = contentHtml;
+    document.getElementById("modal-overlay").style.display = "flex";
+}
+
+function closeModal() {
+    document.getElementById("modal-overlay").style.display = "none";
+    document.getElementById("modal-content").innerHTML = ""; // 내용 비우기
+}
+
+function showConfirm(message, onOk) {
+    const confirmOverlay = document.getElementById("confirm-overlay");
+    document.getElementById("confirm-message").textContent = message;
+    confirmOverlay.style.display = "flex";
+
+    const okButton = document.getElementById("confirm-ok");
+    const cancelButton = document.getElementById("confirm-cancel");
+
+    const newOkButton = okButton.cloneNode(true);
+    okButton.parentNode.replaceChild(newOkButton, okButton);
+
+    const newCancelButton = cancelButton.cloneNode(true);
+    cancelButton.parentNode.replaceChild(newCancelButton, cancelButton);
+
+    newOkButton.addEventListener("click", () => {
+        confirmOverlay.style.display = "none";
+        onOk();
+    });
+    newCancelButton.addEventListener("click", () => {
+        confirmOverlay.style.display = "none";
+    });
+}
+
+function showAlert(message, isError = false) {
+    const title = isError ? "오류" : "알림";
+    const content = `<p class="${isError ? 'text-danger' : ''}">${message}</p>`;
+    showModal(title, content);
+}
+
+// --- 유틸리티 함수 ---
+
+/**
+ * HTML 특수문자를 이스케이프하여 XSS 공격을 방지합니다.
+ * @param {string} text 이스케이프할 텍스트
+ * @returns {string} 이스케이프된 텍스트
+ */
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatVND(number) {
+    return new Intl.NumberFormat('en-US').format(number);
+}
+
+// --- '구매 내역' 페이지 (검색) ---
+function bindHistorySearch() {
+    const searchInput = document.querySelector('.card input[type="search"]');
+    if (searchInput) {
+        // ID를 동적으로 할당 (Code.gs에서 ID가 없으므로)
+        searchInput.id = 'history-search';
+    }
+}
+
+function filterTable(input) {
+    const filter = input.value.toUpperCase();
+    const table = document.querySelector(".styled-table");
+    const tr = table.getElementsByTagName("tr");
+
+    // Loop through all table rows, and hide those who don't match the search query
+    // (index 0은 a_thead이므로 1부터 시작)
+    for (let i = 1; i < tr.length; i++) {
+        const tdArray = tr[i].getElementsByTagName("td");
+        let textValue = "";
+        for (let j = 0; j < tdArray.length; j++) {
+            if (tdArray[j]) {
+                textValue += tdArray[j].textContent || tdArray[j].innerText;
+            }
+        }
+        
+        if (textValue.toUpperCase().indexOf(filter) > -1) {
+            tr[i].style.display = "";
+        } else {
+            tr[i].style.display = "none";
+        }
+    }
+}
+
+// --- '구매 등록' 페이지 ---
+
+function handlePOSelection(poId) {
+    if (!poId || poId.trim() === '') {
+        // PO 선택 해제 시 폼 초기화
+        document.getElementById('reg-item').value = '';
+        document.getElementById('reg-category').value = '';
+        document.getElementById('reg-supplier').value = '';
+        document.getElementById('reg-qty').value = '1';
+        document.getElementById('reg-unit').value = '';
+        document.getElementById('reg-price').value = '';
+        document.getElementById('reg-total').value = '';
+        return;
+    }
+
+    showSpinner();
+    google.script.run
+        .withSuccessHandler(poDetails => {
+            hideSpinner();
+
+            // PO의 첫 번째 아이템 정보로 폼 자동입력
+            if (poDetails.items && poDetails.items.length > 0) {
+                const firstItem = poDetails.items[0];
+                document.getElementById('reg-item').value = firstItem.name || '';
+                document.getElementById('reg-category').value = firstItem.category || '';
+                document.getElementById('reg-qty').value = firstItem.quantity || '1';
+                document.getElementById('reg-unit').value = firstItem.unit || '';
+                document.getElementById('reg-price').value = firstItem.unitPrice || '0';
+
+                // 총액 자동 계산
+                const qty = Number(firstItem.quantity) || 0;
+                const price = Number(firstItem.unitPrice) || 0;
+                document.getElementById('reg-total').value = qty * price;
+
+                // 공급사 자동 선택
+                document.getElementById('reg-supplier').value = poDetails.supplierId || '';
+
+                showAlert(`PO ${poId}의 첫 번째 아이템 정보가 자동 입력되었습니다.`);
+            } else {
+                showAlert('이 PO에는 아이템 정보가 없습니다.', true);
+            }
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getPODetails(poId);
+}
+
+function handlePurchaseFormSubmit(form) {
+    showSpinner();
+    const formData = {
+        poId: form.poId.value,
+        itemName: form.itemName.value,
+        category: form.category.value,
+        supplierId: form.supplierId.value,
+        purchaseDate: form.purchaseDate.value,
+        quantity: form.quantity.value,
+        unit: form.unit.value,
+        unitPrice: form.unitPrice.value
+    };
+
+    const messageDiv = document.getElementById("form-message");
+
+    google.script.run
+        .withSuccessHandler(response => {
+            hideSpinner();
+            messageDiv.textContent = response;
+            messageDiv.className = "mt-1 text-success";
+            form.reset(); 
+            setTimeout(() => {
+                loadPage("구매 내역", document.querySelector('a[data-page="구매 내역"]'));
+            }, 3000);
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            messageDiv.textContent = error.message;
+            messageDiv.className = "mt-1 text-danger";
+        })
+        .addPurchaseEntry(formData);
+}
+
+// --- '공급사 관리' 페이지 (CRUD) ---
+
+function showAddSupplierModal() {
+    const content = `
+        <form id="supplier-form">
+            <input type="hidden" name="id" value="">
+            <div class="form-group">
+                <label for="sup-name">공급사명</label>
+                <input type="text" id="sup-name" name="name" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label for="sup-contact">담당자명</label>
+                <input type="text" id="sup-contact" name="contactPerson" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="sup-phone">연락처</label>
+                <input type="tel" id="sup-phone" name="phone" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="sup-email">이메일</label>
+                <input type="email" id="sup-email" name="email" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="sup-address">주소 (선택)</label>
+                <input type="text" id="sup-address" name="address" class="form-control">
+            </div>
+            <footer class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+                <button type="submit" class="btn btn-primary">저장</button>
+            </footer>
+        </form>
+    `;
+    showModal("신규 공급사 추가", content);
+
+    // 모달이 표시된 직후, 폼에 직접 이벤트 바인딩
+    setTimeout(() => {
+        const form = document.getElementById('supplier-form');
+        console.log("🔍 폼 검색 결과:", form);
+        if (form) {
+            console.log("✅ 폼 발견! 이벤트 리스너 추가 중...");
+            form.addEventListener('submit', function(e) {
+                console.log("🎯 직접 바인딩된 submit 이벤트 발생!");
+                e.preventDefault();
+                handleSupplierFormSubmit(form);
+            });
+        } else {
+            console.error("❌ 폼을 찾을 수 없습니다!");
+        }
+    }, 100); // 100ms 후에 폼 확인
+}
+
+function editSupplier(id) {
+    showSpinner();
+    google.script.run
+        .withSuccessHandler(supplier => {
+            hideSpinner();
+            const content = `
+                <form id="supplier-form">
+                    <input type="hidden" name="id" value="${supplier.id}">
+                    <div class="form-group">
+                        <label for="sup-name">공급사명</label>
+                        <input type="text" id="sup-name" name="name" class="form-control" value="${supplier.name || ''}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sup-contact">담당자명</label>
+                        <input type="text" id="sup-contact" name="contactPerson" class="form-control" value="${supplier.contactPerson || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label for="sup-phone">연락처</label>
+                        <input type="tel" id="sup-phone" name="phone" class="form-control" value="${supplier.phone || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label for="sup-email">이메일</label>
+                        <input type="email" id="sup-email" name="email" class="form-control" value="${supplier.email || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label for="sup-address">주소 (선택)</label>
+                        <input type="text" id="sup-address" name="address" class="form-control" value="${supplier.address || ''}">
+                    </div>
+                    <footer class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+                        <button type="submit" class="btn btn-primary">수정</button>
+                    </footer>
+                </form>
+            `;
+            showModal("공급사 정보 수정", content);
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getSupplierDetails(id);
+}
+
+function deleteSupplier(id) {
+    showConfirm(`정말 이 공급사(ID: ${id})를 삭제하시겠습니까?`, () => {
+        showSpinner();
+        google.script.run
+            .withSuccessHandler(response => {
+                hideSpinner();
+                showAlert(response);
+                loadPage("공급사 관리", document.querySelector('a[data-page="공급사 관리"]'));
+            })
+            .withFailureHandler(error => {
+                hideSpinner();
+                showAlert(error.message, true);
+            })
+            .deleteRowById(SHEET_NAMES.SUPPLIERS, id);
+    });
+}
+
+/**
+ * [수정됨] '신규 공급사 추가' 또는 '수정' 폼 제출을 처리합니다.
+ * (치명적인 런타임 오류 수정)
+ */
+function handleSupplierFormSubmit(form) {
+    console.log("=== handleSupplierFormSubmit 호출됨 ===");
+    console.log("Form:", form);
+
+    showSpinner();
+    const formData = {
+        id: form.id.value,
+        name: form.name.value,
+        contactPerson: form.contactPerson.value,
+        email: form.email.value,
+        phone: form.phone.value,
+        address: form.address.value
+    };
+
+    console.log("FormData:", formData);
+    const isUpdate = formData.id ? true : false;
+    console.log("isUpdate:", isUpdate);
+
+    // 성공/실패 콜백을 정의합니다.
+    const successCallback = (response) => {
+        console.log("✅ Success:", response);
+        hideSpinner();
+        closeModal();
+        showAlert(response);
+        loadPage("공급사 관리", document.querySelector('a[data-page="공급사 관리"]'));
+    };
+
+    const failureCallback = (error) => {
+        console.error("❌ Error:", error);
+        hideSpinner();
+        showAlert(error.message, true);
+    };
+
+    // isUpdate 값에 따라 올바른 서버 함수를 명시적으로 호출합니다.
+    if (isUpdate) {
+        console.log("Calling updateSupplier...");
+        google.script.run
+            .withSuccessHandler(successCallback)
+            .withFailureHandler(failureCallback)
+            .updateSupplier(formData);
+    } else {
+        console.log("Calling addSupplier...");
+        google.script.run
+            .withSuccessHandler(successCallback)
+            .withFailureHandler(failureCallback)
+            .addSupplier(formData);
+    }
+}
+
+
+// --- 'PO 관리' 페이지 ---
+
+function deletePO(id) {
+    showConfirm(`정말 이 PO(ID: ${id})를 삭제하시겠습니까?`, () => {
+        showSpinner();
+        google.script.run
+            .withSuccessHandler(response => {
+                hideSpinner();
+                showAlert(response);
+                loadPage("PO 관리", document.querySelector('a[data-page="PO 관리"]'));
+            })
+            .withFailureHandler(error => {
+                hideSpinner();
+                showAlert(error.message, true);
+            })
+            .deleteRowById(SHEET_NAMES.PO, id);
+    });
+}
+
+function cancelPO(id) {
+    showConfirm(`PO(ID: ${id})를 취소하시겠습니까?`, () => {
+        showSpinner();
+        google.script.run
+            .withSuccessHandler(response => {
+                hideSpinner();
+                showAlert(response);
+                loadPage("PO 관리", document.querySelector('a[data-page="PO 관리"]'));
+            })
+            .withFailureHandler(error => {
+                hideSpinner();
+                showAlert(error.message, true);
+            })
+            .updatePOStatus(id, '취소');
+    });
+}
+
+/**
+ * '아이템 보기' 버튼 클릭 시 PO의 아이템 목록을 모달로 띄웁니다.
+ */
+function viewPOItems(id) {
+    showSpinner();
+    google.script.run
+        .withSuccessHandler(html => {
+            hideSpinner();
+            showModal(`PO (${id}) 아이템 목록`, html);
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getPOItemsAsHtml(id);
+}
+
+/**
+ * '새 PO 생성' 모달을 엽니다.
+ */
+function showAddPOModal() {
+    showSpinner();
+    // 서버에서 공급사 목록, 아이템 목록을 가져옵니다.
+    google.script.run
+        .withSuccessHandler(data => {
+            hideSpinner();
+            poModalItemsData = data.items; // 아이템 데이터 캐시
+            
+            let supplierOptions = data.suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            let itemDatalist = data.items.map(i => `<option value="${i.name}"></option>`).join('');
+
+            const content = `
+                <form id="po-form">
+                    <div class="form-group">
+                        <label for="po-supplier">공급사</label>
+                        <select id="po-supplier" name="supplierId" class="form-control" required>
+                            <option value="">-- 공급사 선택 --</option>
+                            ${supplierOptions}
+                        </select>
+                    </div>
+
+                    <hr class="mb-2">
+                    <h5 style="margin-bottom: 10px;">아이템 목록</h5>
+
+                    <!-- 아이템 검색 기능 -->
+                    <div class="form-group" style="position: relative;">
+                        <label for="po-item-search">🔍 아이템 검색 (기존 아이템 선택)</label>
+                        <input type="text" id="po-item-search" class="form-control" placeholder="아이템명, 카테고리로 검색..." autocomplete="off">
+                        <div id="po-search-results" style="display: none; position: absolute; z-index: 1000; background: white; border: 1px solid #ddd; border-radius: 4px; max-height: 250px; overflow-y: auto; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
+                    </div>
+
+                    <!-- 컬럼 헤더 -->
+                    <div class="po-item-header" style="display: grid; grid-template-columns: 2fr 1.2fr 0.8fr 0.8fr 1.2fr 40px; gap: 8px; margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-weight: 600; font-size: 0.9em; color: #495057;">
+                        <div>아이템명</div>
+                        <div>카테고리</div>
+                        <div>수량</div>
+                        <div>단위</div>
+                        <div>단가 (VND)</div>
+                        <div></div>
+                    </div>
+
+                    <div id="po-item-list">
+                        <!-- 동적 아이템 행이 여기에 추가됩니다 -->
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm add-po-item-row mt-1">
+                        + 아이템 추가
+                    </button>
+                    <datalist id="item-list-datalist">
+                        ${itemDatalist}
+                    </datalist>
+
+                    <hr class="mt-2 mb-2">
+                    <div class="form-group">
+                        <label for="po-notes">메모 (선택)</label>
+                        <textarea id="po-notes" name="notes" class="form-control" rows="3"></textarea>
+                    </div>
+
+                    <div class="po-total-display">
+                        <strong>총 합계:</strong>
+                        <span id="po-total-amount">0 VND</span>
+                    </div>
+
+                    <footer class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+                        <button type="submit" class="btn btn-primary">PO 생성</button>
+                    </footer>
+                </form>
+            `;
+            showModal("새 PO 생성", content);
+            addPOItemRow(); // 첫 번째 아이템 행을 기본으로 추가
+
+            // 모달이 표시된 직후, 폼에 직접 이벤트 바인딩 및 검색 기능 초기화
+            setTimeout(() => {
+                const form = document.getElementById('po-form');
+                if (form) {
+                    form.addEventListener('submit', function(e) {
+                        e.preventDefault();
+                        handlePOFormSubmit(form);
+                    });
+                }
+
+                // 아이템 검색 기능 초기화
+                initializePOItemSearch();
+            }, 100);
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getPOModalData();
+}
+
+/**
+ * PO 모달에 아이템 입력 행을 추가합니다.
+ */
+function addPOItemRow() {
+    const list = document.getElementById('po-item-list');
+    const row = document.createElement('div');
+    row.className = 'po-item-row dynamic-row';
+    row.style.cssText = 'display: grid; grid-template-columns: 2fr 1.2fr 0.8fr 0.8fr 1.2fr 40px; gap: 8px; margin-bottom: 8px; align-items: center;';
+    row.innerHTML = `
+        <input type="text" name="itemName" class="form-control po-item-name" list="item-list-datalist" placeholder="아이템명 입력" required>
+        <input type="text" name="category" class="form-control po-item-category" placeholder="카테고리" required>
+        <input type="number" name="quantity" class="form-control po-item-qty" min="1" value="1" required>
+        <input type="text" name="unit" class="form-control po-item-unit" placeholder="ea, kg 등" required>
+        <input type="number" name="unitPrice" class="form-control po-item-price" min="0" value="0" required>
+        <button type="button" class="btn-icon remove-row-btn" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">&times;</button>
+    `;
+    list.appendChild(row);
+
+    // 입력 필드 변경 시 총액 업데이트
+    row.querySelectorAll('.po-item-qty, .po-item-price').forEach(input => {
+        input.addEventListener('input', updatePOTotal);
+    });
+
+    // 아이템명 선택 시 자동완성
+    row.querySelector('.po-item-name').addEventListener('change', function() {
+        onPOItemSelect(this);
+    });
+
+    updatePOTotal();
+}
+
+/**
+ * PO 모달에 아이템 데이터가 미리 채워진 행을 추가합니다.
+ */
+function addPOItemRowWithData(itemData) {
+    const list = document.getElementById('po-item-list');
+    const row = document.createElement('div');
+    row.className = 'po-item-row dynamic-row';
+    row.style.cssText = 'display: grid; grid-template-columns: 2fr 1.2fr 0.8fr 0.8fr 1.2fr 40px; gap: 8px; margin-bottom: 8px; align-items: center;';
+    row.innerHTML = `
+        <input type="text" name="itemName" class="form-control po-item-name" list="item-list-datalist" value="${escapeAttribute(itemData.name)}" required readonly style="background: #f0f7ff;">
+        <input type="text" name="category" class="form-control po-item-category" value="${escapeAttribute(itemData.category || '')}" required>
+        <input type="number" name="quantity" class="form-control po-item-qty" min="1" value="1" required>
+        <input type="text" name="unit" class="form-control po-item-unit" value="${escapeAttribute(itemData.defaultUnit || 'ea')}" required>
+        <input type="number" name="unitPrice" class="form-control po-item-price" min="0" value="${itemData.defaultPrice || 0}" required>
+        <button type="button" class="btn-icon remove-row-btn" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">&times;</button>
+    `;
+    list.appendChild(row);
+
+    // 입력 필드 변경 시 총액 업데이트
+    row.querySelectorAll('.po-item-qty, .po-item-price').forEach(input => {
+        input.addEventListener('input', updatePOTotal);
+    });
+
+    updatePOTotal();
+}
+
+/**
+ * PO 모달에서 아이템을 선택(datalist)했을 때 카테고리/단가/단위를 자동 완성합니다.
+ */
+function onPOItemSelect(inputElement) {
+    const selectedName = inputElement.value;
+    const itemData = poModalItemsData.find(i => i.name === selectedName);
+    if (itemData) {
+        const row = inputElement.closest('.po-item-row');
+        row.querySelector('.po-item-category').value = itemData.category || '';
+        row.querySelector('.po-item-unit').value = itemData.defaultUnit || '';
+        row.querySelector('.po-item-price').value = itemData.defaultPrice || 0;
+        updatePOTotal();
+    }
+}
+
+/**
+ * PO 모달의 아이템 검색 기능을 초기화합니다.
+ */
+function initializePOItemSearch() {
+    const searchInput = document.getElementById('po-item-search');
+    const searchResults = document.getElementById('po-search-results');
+
+    if (!searchInput || !searchResults) return;
+
+    // 검색 입력 시 결과 표시
+    searchInput.addEventListener('input', function(e) {
+        const query = e.target.value.trim().toLowerCase();
+
+        if (query.length === 0) {
+            searchResults.style.display = 'none';
+            searchResults.innerHTML = '';
+            return;
+        }
+
+        // 아이템 검색 (이름 또는 카테고리로)
+        const filtered = poModalItemsData.filter(item => {
+            const nameMatch = item.name.toLowerCase().includes(query);
+            const categoryMatch = (item.category || '').toLowerCase().includes(query);
+            return nameMatch || categoryMatch;
+        });
+
+        if (filtered.length === 0) {
+            searchResults.innerHTML = '<div style="padding: 12px; color: #999; text-align: center;">검색 결과가 없습니다</div>';
+            searchResults.style.display = 'block';
+            return;
+        }
+
+        // 검색 결과 표시 (최대 10개)
+        let html = '';
+        filtered.slice(0, 10).forEach(item => {
+            const priceText = item.defaultPrice ? `${Number(item.defaultPrice).toLocaleString('en-US')} VND` : '가격 미정';
+            html += `
+                <div class="search-result-item" data-item-name="${escapeAttribute(item.name)}"
+                     style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eee; transition: background 0.2s;"
+                     onmouseover="this.style.background='#f0f7ff'"
+                     onmouseout="this.style.background='white'">
+                    <div style="font-weight: 500; color: #2c3e50;">${escapeHtml(item.name)}</div>
+                    <div style="font-size: 0.85em; color: #7f8c8d; margin-top: 2px;">
+                        카테고리: ${escapeHtml(item.category || '미분류')} |
+                        단위: ${escapeHtml(item.defaultUnit || 'ea')} |
+                        단가: ${priceText}
+                    </div>
+                </div>
+            `;
+        });
+
+        if (filtered.length > 10) {
+            html += `<div style="padding: 8px 12px; background: #f8f9fa; text-align: center; color: #666; font-size: 0.85em;">외 ${filtered.length - 10}개 더...</div>`;
+        }
+
+        searchResults.innerHTML = html;
+        searchResults.style.display = 'block';
+
+        // 검색 결과 클릭 시 아이템 추가
+        searchResults.querySelectorAll('.search-result-item').forEach(resultItem => {
+            resultItem.addEventListener('click', function() {
+                const itemName = this.getAttribute('data-item-name');
+                const itemData = poModalItemsData.find(i => i.name === itemName);
+
+                if (itemData) {
+                    addPOItemRowWithData(itemData);
+                    searchInput.value = '';
+                    searchResults.style.display = 'none';
+                    searchResults.innerHTML = '';
+                    showAlert(`'${itemData.name}' 아이템이 추가되었습니다.`);
+                }
+            });
+        });
+    });
+
+    // 검색창 포커스 아웃 시 결과 숨기기 (약간의 딜레이로 클릭 이벤트가 먼저 실행되도록)
+    searchInput.addEventListener('blur', function() {
+        setTimeout(() => {
+            searchResults.style.display = 'none';
+        }, 200);
+    });
+
+    // 검색창 포커스 시 기존 검색어가 있으면 결과 다시 표시
+    searchInput.addEventListener('focus', function() {
+        if (this.value.trim().length > 0) {
+            this.dispatchEvent(new Event('input'));
+        }
+    });
+}
+
+/**
+ * Helper function: HTML 속성값 이스케이프
+ */
+function escapeAttribute(str) {
+    if (!str) return '';
+    return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
+ * PO 모달의 총 합계를 계산하여 업데이트합니다.
+ */
+function updatePOTotal() {
+    let total = 0;
+    document.querySelectorAll('#po-item-list .po-item-row').forEach(row => {
+        const qty = Number(row.querySelector('.po-item-qty').value) || 0;
+        const price = Number(row.querySelector('.po-item-price').value) || 0;
+        total += qty * price;
+    });
+    const totalElement = document.getElementById('po-total-amount');
+    if (totalElement) {
+        totalElement.textContent = `${formatVND(total)} VND`;
+    }
+}
+
+/**
+ * '새 PO 생성' 폼 제출을 처리합니다.
+ */
+function handlePOFormSubmit(form) {
+    showSpinner();
+    const items = [];
+    document.querySelectorAll('#po-item-list .po-item-row').forEach(row => {
+        items.push({
+            name: row.querySelector('.po-item-name').value,
+            category: row.querySelector('.po-item-category').value,
+            quantity: row.querySelector('.po-item-qty').value,
+            unit: row.querySelector('.po-item-unit').value,
+            unitPrice: row.querySelector('.po-item-price').value
+        });
+    });
+
+    if (items.length === 0) {
+        showAlert("하나 이상의 아이템을 추가해야 합니다.", true);
+        hideSpinner();
+        return;
+    }
+
+    const formData = {
+        supplierId: form.supplierId.value,
+        notes: form.notes.value,
+        items: items
+    };
+
+    google.script.run
+        .withSuccessHandler(response => {
+            hideSpinner();
+            closeModal();
+            showAlert(response);
+            loadPage("PO 관리", document.querySelector('a[data-page="PO 관리"]'));
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .addPO(formData);
+}
+
+// --- '데이터베이스' 페이지 ---
+
+/**
+ * '신규 아이템 추가' 모달을 엽니다.
+ */
+function showAddItemModal() {
+    showSpinner();
+    // 아이템 모달은 공급사 목록만 있으면 됩니다.
+    google.script.run
+        .withSuccessHandler(map => {
+            hideSpinner();
+            supplierMapData = map; // 공급사 맵 캐시
+            let supplierDatalist = Object.values(map).map(name => `<option value="${name}"></option>`).join('');
+
+            const content = `
+                <form id="item-db-form">
+                    <input type="hidden" name="id" value="">
+                    <div class="form-group">
+                        <label for="item-name">아이템명</label>
+                        <input type="text" id="item-name" name="name" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="item-category">카테고리</label>
+                        <input type="text" id="item-category" name="category" class="form-control" placeholder="예: 사무용품">
+                    </div>
+                    <div class="form-group">
+                        <label for="item-notes">메모 (선택)</label>
+                        <textarea id="item-notes" name="notes" class="form-control" rows="2"></textarea>
+                    </div>
+                    
+                    <hr class="mb-2">
+                    <h5>공급사 및 단가 정보</h5>
+                    <div id="item-supplier-list">
+                        <!-- 동적 공급사 행이 여기에 추가됩니다 -->
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm add-item-supplier-row mt-1">
+                        + 공급사 추가
+                    </button>
+                    <datalist id="supplier-list-datalist">
+                        ${supplierDatalist}
+                    </datalist>
+
+                    <footer class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+                        <button type="submit" class="btn btn-primary">저장</button>
+                    </footer>
+                </form>
+            `;
+            showModal("신규 아이템 추가", content);
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getSupplierMap();
+}
+
+/**
+ * '아이템 수정' 모달을 엽니다.
+ */
+function showEditItemModal(id) {
+    showSpinner();
+    // 1. 아이템 정보 가져오기
+    google.script.run
+        .withSuccessHandler(item => {
+            // 2. 공급사 맵 가져오기
+            google.script.run
+                .withSuccessHandler(map => {
+                    hideSpinner();
+                    supplierMapData = map;
+                    let supplierDatalist = Object.values(map).map(name => `<option value="${name}"></option>`).join('');
+                    
+                    let supplierRows = '';
+                    try {
+                        const suppliers = JSON.parse(item.suppliersJSON || '[]');
+                        suppliers.forEach(s => {
+                            supplierRows += `
+                                <div class="item-supplier-row dynamic-row">
+                                    <input type="text" name="supplierName" class="form-control" list="supplier-list-datalist" placeholder="공급사명" value="${s.name || ''}" required>
+                                    <input type="text" name="supplierUnit" class="form-control" placeholder="단위" value="${s.unit || ''}" required>
+                                    <input type="number" name="supplierPrice" class="form-control" placeholder="단가 (VND)" value="${s.price || 0}" min="0" required>
+                                    <button type="button" class="btn-icon remove-row-btn">&times;</button>
+                                </div>
+                            `;
+                        });
+                    } catch (e) { console.error("공급사 JSON 파싱 오류:", e); }
+
+                    const content = `
+                        <form id="item-db-form">
+                            <input type="hidden" name="id" value="${item.id}">
+                            <div class="form-group">
+                                <label for="item-name">아이템명</label>
+                                <input type="text" id="item-name" name="name" class="form-control" value="${item.name || ''}" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="item-category">카테고리</label>
+                                <input type="text" id="item-category" name="category" class="form-control" value="${item.category || ''}">
+                            </div>
+                            <div class="form-group">
+                                <label for="item-notes">메모 (선택)</label>
+                                <textarea id="item-notes" name="notes" class="form-control" rows="2">${item.notes || ''}</textarea>
+                            </div>
+                            
+                            <hr class="mb-2">
+                            <h5>공급사 및 단가 정보</h5>
+                            <div id="item-supplier-list">
+                                ${supplierRows}
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm add-item-supplier-row mt-1">
+                                + 공급사 추가
+                            </button>
+                            <datalist id="supplier-list-datalist">
+                                ${supplierDatalist}
+                            </datalist>
+
+                            <footer class="modal-footer">
+                                <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+                                <button type="submit" class="btn btn-primary">수정</button>
+                            </footer>
+                        </form>
+                    `;
+                    showModal("아이템 정보 수정", content);
+                })
+                .withFailureHandler(err => { hideSpinner(); showAlert(err.message, true); })
+                .getSupplierMap();
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            showAlert(error.message, true);
+        })
+        .getItemDetails(id);
+}
+
+/**
+ * 아이템 모달에 공급사 입력 행을 추가합니다.
+ */
+function addItemSupplierRow() {
+    const list = document.getElementById('item-supplier-list');
+    const row = document.createElement('div');
+    row.className = 'item-supplier-row dynamic-row';
+    row.innerHTML = `
+        <input type="text" name="supplierName" class="form-control" list="supplier-list-datalist" placeholder="공급사명" required>
+        <input type="text" name="supplierUnit" class="form-control" placeholder="단위 (예: 개)" required>
+        <input type="number" name="supplierPrice" class="form-control" placeholder="단가 (VND)" min="0" value="0" required>
+        <button type="button" class="btn-icon remove-row-btn">&times;</button>
+    `;
+    list.appendChild(row);
+}
+
+/**
+ * [수정됨] '신규 아이템 추가' 또는 '수정' 폼 제출을 처리합니다.
+ * (치명적인 런타임 오류 수정)
+ */
+function handleItemDBFormSubmit(form) {
+    showSpinner();
+    const suppliers = [];
+    document.querySelectorAll('#item-supplier-list .item-supplier-row').forEach(row => {
+        suppliers.push({
+            name: row.querySelector('input[name="supplierName"]').value,
+            unit: row.querySelector('input[name="supplierUnit"]').value,
+            price: row.querySelector('input[name="supplierPrice"]').value
+        });
+    });
+
+    const formData = {
+        id: form.id.value,
+        itemName: form.name.value,
+        category: form.category.value,
+        notes: form.notes.value,
+        suppliersJSON: JSON.stringify(suppliers) // JSON 문자열로 변환
+    };
+
+    const isUpdate = formData.id ? true : false;
+
+    // 성공/실패 콜백을 정의합니다.
+    const successCallback = (response) => {
+        hideSpinner();
+        closeModal();
+        showAlert(response);
+        loadPage("데이터베이스", document.querySelector('a[data-page="데이터베이스"]'));
+    };
+
+    const failureCallback = (error) => {
+        hideSpinner();
+        showAlert(error.message, true);
+    };
+    
+    // isUpdate 값에 따라 올바른 서버 함수를 명시적으로 호출합니다.
+    if (isUpdate) {
+        google.script.run
+            .withSuccessHandler(successCallback)
+            .withFailureHandler(failureCallback)
+            .updateItem(formData);
+    } else {
+        google.script.run
+            .withSuccessHandler(successCallback)
+            .withFailureHandler(failureCallback)
+            .addItem(formData);
+    }
+}
+
+
+// --- '분석' 페이지 ---
+
+function handleTabClick(tabElement) {
+    const tabs = document.querySelectorAll(".tab-link");
+    const contents = document.querySelectorAll(".tab-content");
+
+    tabs.forEach(t => t.classList.remove("active"));
+    contents.forEach(c => c.classList.remove("active"));
+
+    tabElement.classList.add("active");
+    document.getElementById(tabElement.dataset.tab).classList.add("active");
+}
+
+function handleAnalysisQuery(type) {
+    const startDate = document.getElementById(`${type === 'category' ? 'cat' : 'sup'}-start`).value;
+    const endDate = document.getElementById(`${type === 'category' ? 'cat' : 'sup'}-end`).value;
+
+    if (!startDate || !endDate) {
+        showAlert("시작일과 종료일을 모두 선택해야 합니다.", true);
+        return;
+    }
+
+    const resultsDiv = document.getElementById(`analysis-results-${type}`);
+    resultsDiv.innerHTML = '<div class="spinner-small"></div>';
+    showSpinner();
+
+    const options = {
+        type: type,
+        startDate: startDate,
+        endDate: endDate
+    };
+
+    google.script.run
+        .withSuccessHandler(result => {
+            hideSpinner();
+            resultsDiv.innerHTML = `
+                <h5 style="margin-top:0;">${result.title}</h5>
+                <table class="styled-table" style="width: 100%;">${result.htmlTable}</table>
+            `;
+        })
+        .withFailureHandler(error => {
+            hideSpinner();
+            resultsDiv.innerHTML = `<p class="text-danger">${error.message}</p>`;
+        })
+        .getAnalysisData(options);
+}
+
+// --- 파일 업로드 (거래명세서 / 세금계산서) ---
+
+/**
+ * 파일 업로드 폼 제출을 처리합니다.
+ * @param {HTMLFormElement} form - 제출된 폼
+ * @param {'STATEMENT' | 'TAX'} type - 업로드 유형
+ */
+function handleFileUpload(form, type) {
+    const fileInput = form.file;
+    const file = fileInput.files[0];
+    const submitButton = form.querySelector('button[type="submit"]');
+
+    if (!file) {
+        showAlert("업로드할 파일을 선택하세요.", true);
+        return;
+    }
+
+    // 파일 타입 검증
+    if (!FILE_UPLOAD_CONFIG.ALLOWED_TYPES.includes(file.type)) {
+        showAlert("지원하지 않는 파일 형식입니다. PDF, 이미지, 문서 파일만 업로드 가능합니다.", true);
+        return;
+    }
+
+    // 파일 크기 검증
+    if (file.size > FILE_UPLOAD_CONFIG.MAX_SIZE_BYTES) {
+        showAlert(`파일 크기가 너무 큽니다. 최대 ${FILE_UPLOAD_CONFIG.MAX_SIZE_MB}MB까지 업로드 가능합니다.`, true);
+        return;
+    }
+
+    // 1. 파일을 Base64로 읽기
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const fileData = e.target.result; // Base64 data
+        const fileName = file.name;
+        
+        submitButton.disabled = true;
+        submitButton.innerHTML = '<span class="spinner-small" style="width: 1.2rem; height: 1.2rem; border-width: 2px; margin: 0;"></span> 업로드 중...';
+        showSpinner(); // 전체 스피너도 표시
+
+        // 2. Drive에 파일 저장
+        google.script.run
+            .withSuccessHandler(fileUrl => {
+                // 3. 파일 URL과 메타데이터를 시트에 저장
+                let recordData;
+                let serverFunction;
+                let pageToReload;
+
+                if (type === 'STATEMENT') {
+                    recordData = {
+                        issueDate: form.issueDate.value,
+                        supplierId: form.supplierId.value,
+                        amount: form.amount.value,
+                        poIds: form.poIds.value,
+                        fileUrl: fileUrl
+                    };
+                    serverFunction = 'addStatementRecord';
+                    pageToReload = "거래명세서 관리";
+                } else { // TAX
+                    recordData = {
+                        issueDate: form.issueDate.value,
+                        month: form.month.value,
+                        supplierId: form.supplierId.value,
+                        totalAmount: form.totalAmount.value,
+                        fileUrl: fileUrl
+                    };
+                    serverFunction = 'addTaxInvoiceRecord';
+                    pageToReload = "세금계산서 관리";
+                }
+
+                google.script.run
+                    .withSuccessHandler(response => {
+                        hideSpinner();
+                        showAlert(response);
+                        loadPage(pageToReload, document.querySelector(`a[data-page="${pageToReload}"]`));
+                    })
+                    .withFailureHandler(error => {
+                        hideSpinner();
+                        showAlert(`파일은 Drive에 저장되었으나 시트 기록에 실패했습니다: ${error.message}`, true);
+                        submitButton.disabled = false;
+                        submitButton.textContent = "업로드 및 저장";
+                    })
+                    [serverFunction](recordData);
+            })
+            .withFailureHandler(error => {
+                hideSpinner();
+                showAlert(`파일 업로드 실패: ${error.message}`, true);
+                submitButton.disabled = false;
+                submitButton.textContent = "업로드 및 저장";
+            })
+            .saveFileToDrive(fileData, fileName);
+    };
+    reader.onerror = function() {
+        showAlert("파일을 읽는 데 실패했습니다.", true);
+    };
+    reader.readAsDataURL(file);
+}
+
+</script>
