@@ -350,7 +350,7 @@ function getPOPage() {
       <h3>발주서(PO) 관리</h3>
       <div class="card mb-2">
           <h4>신규 발주서 생성</h4>
-          <button class="btn btn-primary" onclick="showNewPOForm()">+ 신규 PO 생성</button>
+          <button class="btn btn-primary" onclick="showAddPOModal()">+ 신규 PO 생성</button>
       </div>
       <div class="card">
           <h4>PO 목록</h4>
@@ -592,27 +592,28 @@ function getDatabasePage() {
     let tableRows = "";
 
     if (lastRow > 1) {
-      // ItemID, ItemName, Category, Notes, SuppliersJSON
-      const data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+      // ItemID(A), Code(B), ItemName(C), Category(D), Notes(E), SuppliersJSON(F)
+      const data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
 
       data.forEach(row => {
         let suppliers = "정보 없음";
         try {
-          // row[4] = SuppliersJSON
-          if (row[4] && row[4] !== "[]") {
-            const supplierData = JSON.parse(row[4]);
+          // row[5] = SuppliersJSON
+          if (row[5] && row[5] !== "[]") {
+            const supplierData = JSON.parse(row[5]);
             suppliers = supplierData.map(s => `${escapeHtml(s.name)} (${Number(s.price).toLocaleString("en-US")} VND)`).join("<br>");
           }
         } catch (_e) {
           // JSON 파싱 실패 시
-          suppliers = escapeHtml(row[4]) || "정보 없음 (파싱 오류)";
+          suppliers = escapeHtml(row[5]) || "정보 없음 (파싱 오류)";
         }
 
         tableRows += `
           <tr>
               <td>${escapeHtml(row[0])}</td> <!-- ItemID -->
-              <td>${escapeHtml(row[1])}</td> <!-- ItemName -->
-              <td>${escapeHtml(row[2])}</td> <!-- Category -->
+              <td>${escapeHtml(row[1] || "-")}</td> <!-- Code -->
+              <td>${escapeHtml(row[2])}</td> <!-- ItemName -->
+              <td>${escapeHtml(row[3])}</td> <!-- Category -->
               <td>${suppliers}</td> <!-- SuppliersJSON 파싱 -->
               <td>
                   <button class="btn btn-secondary btn-sm" onclick="showEditItemModal('${escapeHtml(row[0])}')">수정</button>
@@ -631,6 +632,7 @@ function getDatabasePage() {
           <thead>
               <tr>
                   <th>아이템 ID</th>
+                  <th>Code</th>
                   <th>아이템명</th>
                   <th>카테고리</th>
                   <th>공급사/단가 정보</th>
@@ -638,7 +640,7 @@ function getDatabasePage() {
               </tr>
           </thead>
           <tbody>
-              ${tableRows || "<tr><td colspan=\"5\" style=\"text-align:center;\">데이터가 없습니다.</td></tr>"}
+              ${tableRows || "<tr><td colspan=\"6\" style=\"text-align:center;\">데이터가 없습니다.</td></tr>"}
           </tbody>
       </table>
     `;
@@ -1382,35 +1384,36 @@ function getPOModalData() {
     const supplierMap = getSupplierMap();
     const suppliers = Object.entries(supplierMap).map(([id, name]) => ({ id, name }));
 
-    // 2. 아이템 목록 (Name, Category, DefaultUnit, DefaultPrice)
+    // 2. 아이템 목록 (Code, Name, Category, DefaultUnit, DefaultPrice)
     // ItemDatabase (시트 6)에서 데이터를 가져옵니다.
     const dbSheet = getSheet(SHEET_NAMES.DB);
     const lastRow = dbSheet.getLastRow();
     let items = [];
     if (lastRow > 1) {
-      // ItemID(A), ItemName(B), Category(C), Notes(D), SuppliersJSON(E)
-      const data = dbSheet.getRange(2, 1, lastRow - 1, 5).getValues();
+      // ItemID(A), Code(B), ItemName(C), Category(D), Notes(E), SuppliersJSON(F)
+      const data = dbSheet.getRange(2, 1, lastRow - 1, 6).getValues();
       data.forEach(row => {
         let defaultUnit = "ea";
         let defaultPrice = 0;
 
         try {
           // SuppliersJSON에서 첫 번째 공급사의 단가/단위를 기본값으로 사용
-          if(row[4] && row[4] !== "[]") {
-            const supplierInfo = JSON.parse(row[4]);
+          if(row[5] && row[5] !== "[]") {
+            const supplierInfo = JSON.parse(row[5]);
             if (Array.isArray(supplierInfo) && supplierInfo.length > 0) {
               defaultUnit = supplierInfo[0].unit || "ea";
               defaultPrice = supplierInfo[0].price || 0;
             }
           }
         } catch(e) {
-          Logger.log(`SuppliersJSON 파싱 실패 (아이템: ${row[1]}): ${e.message}`);
+          Logger.log(`SuppliersJSON 파싱 실패 (아이템: ${row[2]}): ${e.message}`);
           // 기본값 사용
         }
 
         items.push({
-          name: row[1], // ItemName
-          category: row[2] || "", // Category
+          code: row[1] || "", // Code
+          name: row[2], // ItemName
+          category: row[3] || "", // Category
           defaultUnit: defaultUnit,
           defaultPrice: defaultPrice
         });
@@ -1590,7 +1593,7 @@ function getPODetails(poId) {
 
 /**
  * [구현 완료] '신규 아이템 추가' 폼 데이터를 받아 시트에 추가합니다.
- * @param {Object} formData { itemName, category, notes, suppliersJSON }
+ * @param {Object} formData { code, itemName, category, notes, suppliersJSON }
  */
 function addItem(formData) {
   try {
@@ -1602,12 +1605,14 @@ function addItem(formData) {
     const sheet = getSheet(SHEET_NAMES.DB);
     const newId = getNextId(sheet, "IT-");
 
+    // ItemID(A), Code(B), ItemName(C), Category(D), Notes(E), SuppliersJSON(F)
     const newRow = [
       newId,
+      formData.code || "",
       formData.itemName,
       formData.category,
       formData.notes || null,
-      formData.suppliersJSON || "[]" // JS에서 생성
+      formData.suppliersJSON || "[]"
     ];
     sheet.appendRow(newRow);
     return `아이템 '${formData.itemName}'이(가) 등록되었습니다.`;
@@ -1628,14 +1633,16 @@ function getItemDetails(id) {
     const data = sheet.getDataRange().getValues();
 
     // 헤더(1행) 건너뛰고 ID(A열, index 0) 검색
+    // ItemID(A), Code(B), ItemName(C), Category(D), Notes(E), SuppliersJSON(F)
     for (let i = 1; i < data.length; i++) {
       if (data[i][0] == id) {
         return {
           id: data[i][0],
-          name: data[i][1],
-          category: data[i][2],
-          notes: data[i][3],
-          suppliersJSON: data[i][4] // 이 JSON 문자열을 클라이언트에서 파싱
+          code: data[i][1] || "",
+          name: data[i][2],
+          category: data[i][3],
+          notes: data[i][4],
+          suppliersJSON: data[i][5] // 이 JSON 문자열을 클라이언트에서 파싱
         };
       }
     }
@@ -1648,7 +1655,7 @@ function getItemDetails(id) {
 
 /**
  * [신규] '아이템 수정' 폼에서 데이터를 받아 시트의 기존 행을 업데이트합니다.
- * @param {Object} formData 폼 데이터 (id, name, category, notes, suppliersJSON 포함)
+ * @param {Object} formData 폼 데이터 (id, code, itemName, category, notes, suppliersJSON 포함)
  * @returns {String} 성공 메시지
  */
 function updateItem(formData) {
@@ -1657,19 +1664,20 @@ function updateItem(formData) {
     const data = sheet.getDataRange().getValues();
 
     // 헤더(1행) 건너뛰고 ID(A열, index 0) 검색
+    // ItemID(A), Code(B), ItemName(C), Category(D), Notes(E), SuppliersJSON(F)
     for (let i = 1; i < data.length; i++) {
       if (data[i][0] == formData.id) {
         // 행을 찾았으면 해당 행(i+1)의 데이터 업데이트
-        // (ID, ItemName, Category, Notes, SuppliersJSON)
-        const range = sheet.getRange(i + 1, 1, 1, 5);
+        const range = sheet.getRange(i + 1, 1, 1, 6);
         range.setValues([[
           formData.id,
-          formData.name,
+          formData.code || "",
+          formData.itemName,
           formData.category,
           formData.notes || null,
           formData.suppliersJSON || "[]"
         ]]);
-        return `아이템 '${formData.name}' 정보가 업데이트되었습니다.`;
+        return `아이템 '${formData.itemName}' 정보가 업데이트되었습니다.`;
       }
     }
     throw new Error("업데이트할 아이템을 찾지 못했습니다.");

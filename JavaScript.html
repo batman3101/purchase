@@ -646,7 +646,7 @@ function showAddPOModal() {
                     <!-- 아이템 검색 기능 -->
                     <div class="form-group" style="position: relative;">
                         <label for="po-item-search">🔍 아이템 검색 (기존 아이템 선택)</label>
-                        <input type="text" id="po-item-search" class="form-control" placeholder="아이템명, 카테고리로 검색..." autocomplete="off">
+                        <input type="text" id="po-item-search" class="form-control" placeholder="Code, 아이템명, 카테고리로 검색..." autocomplete="off">
                         <div id="po-search-results" style="display: none; position: absolute; z-index: 1000; background: white; border: 1px solid #ddd; border-radius: 4px; max-height: 250px; overflow-y: auto; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"></div>
                     </div>
 
@@ -690,17 +690,9 @@ function showAddPOModal() {
       showModal("새 PO 생성", content);
       addPOItemRow(); // 첫 번째 아이템 행을 기본으로 추가
 
-      // 모달이 표시된 직후, 폼에 직접 이벤트 바인딩 및 검색 기능 초기화
+      // 모달이 표시된 직후 검색 기능 초기화
+      // (폼 제출은 document 레벨 이벤트 위임에서 처리됨 - line 145-146)
       setTimeout(() => {
-        const form = document.getElementById("po-form");
-        if (form) {
-          form.addEventListener("submit", function(e) {
-            e.preventDefault();
-            handlePOFormSubmit(form);
-          });
-        }
-
-        // 아이템 검색 기능 초기화
         initializePOItemSearch();
       }, 100);
     })
@@ -802,11 +794,38 @@ function initializePOItemSearch() {
       return;
     }
 
-    // 아이템 검색 (이름 또는 카테고리로)
+    // 아이템 검색 (Code 우선, 이름, 카테고리 순)
     const filtered = poModalItemsData.filter(item => {
+      const codeMatch = (item.code || "").toLowerCase().includes(query);
       const nameMatch = item.name.toLowerCase().includes(query);
       const categoryMatch = (item.category || "").toLowerCase().includes(query);
-      return nameMatch || categoryMatch;
+      return codeMatch || nameMatch || categoryMatch;
+    });
+
+    // Code 매칭을 우선 정렬 (정확히 일치 > 포함 > 이름 매칭 > 카테고리 매칭)
+    filtered.sort((a, b) => {
+      const aCode = (a.code || "").toLowerCase();
+      const bCode = (b.code || "").toLowerCase();
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+
+      // Code 정확히 일치
+      if (aCode === query && bCode !== query) return -1;
+      if (bCode === query && aCode !== query) return 1;
+
+      // Code 포함
+      const aCodeMatch = aCode.includes(query);
+      const bCodeMatch = bCode.includes(query);
+      if (aCodeMatch && !bCodeMatch) return -1;
+      if (bCodeMatch && !aCodeMatch) return 1;
+
+      // 이름 매칭
+      const aNameMatch = aName.includes(query);
+      const bNameMatch = bName.includes(query);
+      if (aNameMatch && !bNameMatch) return -1;
+      if (bNameMatch && !aNameMatch) return 1;
+
+      return 0;
     });
 
     if (filtered.length === 0) {
@@ -819,12 +838,13 @@ function initializePOItemSearch() {
     let html = "";
     filtered.slice(0, 10).forEach(item => {
       const priceText = item.defaultPrice ? `${Number(item.defaultPrice).toLocaleString("en-US")} VND` : "가격 미정";
+      const codeDisplay = item.code ? `<span style="color: #3498db; font-weight: 600;">[${escapeHtml(item.code)}]</span> ` : "";
       html += `
                 <div class="search-result-item" data-item-name="${escapeAttribute(item.name)}"
                      style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eee; transition: background 0.2s;"
                      onmouseover="this.style.background='#f0f7ff'"
                      onmouseout="this.style.background='white'">
-                    <div style="font-weight: 500; color: #2c3e50;">${escapeHtml(item.name)}</div>
+                    <div style="font-weight: 500; color: #2c3e50;">${codeDisplay}${escapeHtml(item.name)}</div>
                     <div style="font-size: 0.85em; color: #7f8c8d; margin-top: 2px;">
                         카테고리: ${escapeHtml(item.category || "미분류")} |
                         단위: ${escapeHtml(item.defaultUnit || "ea")} |
@@ -900,7 +920,23 @@ function updatePOTotal() {
 /**
  * '새 PO 생성' 폼 제출을 처리합니다.
  */
+let isPoSubmitting = false; // 중복 제출 방지 플래그
+
 function handlePOFormSubmit(form) {
+  // 중복 제출 방지
+  if (isPoSubmitting) {
+    console.log("PO 제출 진행 중 - 중복 요청 무시");
+    return;
+  }
+  isPoSubmitting = true;
+
+  // 제출 버튼 비활성화
+  const submitBtn = form.querySelector("button[type=\"submit\"]");
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "처리 중...";
+  }
+
   showSpinner();
   const items = [];
   document.querySelectorAll("#po-item-list .po-item-row").forEach(row => {
@@ -916,6 +952,11 @@ function handlePOFormSubmit(form) {
   if (items.length === 0) {
     showAlert("하나 이상의 아이템을 추가해야 합니다.", true);
     hideSpinner();
+    isPoSubmitting = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "PO 생성";
+    }
     return;
   }
 
@@ -928,12 +969,18 @@ function handlePOFormSubmit(form) {
   google.script.run
     .withSuccessHandler(response => {
       hideSpinner();
+      isPoSubmitting = false;
       closeModal();
       showAlert(response);
       loadPage("PO 관리", document.querySelector("a[data-page=\"PO 관리\"]"));
     })
     .withFailureHandler(error => {
       hideSpinner();
+      isPoSubmitting = false;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "PO 생성";
+      }
       showAlert(error.message, true);
     })
     .addPO(formData);
@@ -956,6 +1003,10 @@ function showAddItemModal() {
       const content = `
                 <form id="item-db-form">
                     <input type="hidden" name="id" value="">
+                    <div class="form-group">
+                        <label for="item-code">Code (선택)</label>
+                        <input type="text" id="item-code" name="code" class="form-control" placeholder="예: ABC-001">
+                    </div>
                     <div class="form-group">
                         <label for="item-name">아이템명</label>
                         <input type="text" id="item-name" name="name" class="form-control" required>
@@ -1029,6 +1080,10 @@ function showEditItemModal(id) {
           const content = `
                         <form id="item-db-form">
                             <input type="hidden" name="id" value="${item.id}">
+                            <div class="form-group">
+                                <label for="item-code">Code (선택)</label>
+                                <input type="text" id="item-code" name="code" class="form-control" value="${item.code || ""}" placeholder="예: ABC-001">
+                            </div>
                             <div class="form-group">
                                 <label for="item-name">아이템명</label>
                                 <input type="text" id="item-name" name="name" class="form-control" value="${item.name || ""}" required>
@@ -1105,6 +1160,7 @@ function handleItemDBFormSubmit(form) {
 
   const formData = {
     id: form.id.value,
+    code: form.code.value,
     itemName: form.name.value,
     category: form.category.value,
     notes: form.notes.value,
