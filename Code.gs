@@ -170,25 +170,38 @@ function getPurchaseHistoryPage() {
     const supplierMap = getSupplierMap(); // 공급사 맵핑
 
     if (lastRow > 1) {
-      // A:L (12개 컬럼)의 모든 데이터를 가져옵니다. 헤더는 제외 (2행부터).
-      const data = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+      // A:N (14개 컬럼)의 모든 데이터를 가져옵니다. 헤더는 제외 (2행부터).
+      const data = sheet.getRange(2, 1, lastRow - 1, 14).getValues();
 
       data.reverse().forEach(row => {
         let purchaseDate = formatDateKR(row[1]);
-        let supplierName = escapeHtml(supplierMap[row[8]] || row[8]); // ID(row[8])를 이름으로
+        let supplierName = escapeHtml(supplierMap[row[8]] || row[8]);
 
-        tableRows += `
-          <tr>
-              <td>${escapeHtml(purchaseDate)}</td>
-              <td>${escapeHtml(row[2])}</td> <!-- ItemName -->
-              <td>${escapeHtml(row[3])}</td> <!-- Category -->
-              <td>${escapeHtml(row[4])} ${escapeHtml(row[5])}</td> <!-- Quantity Unit -->
-              <td>${Number(row[6]).toLocaleString("en-US")} VND</td> <!-- UnitPrice -->
-              <td>${Number(row[7]).toLocaleString("en-US")} VND</td> <!-- TotalPrice -->
-              <td>${supplierName}</td>
-              <td>${escapeHtml(row[9])}</td> <!-- PO_ID -->
-          </tr>
-        `;
+        // PO 수량 정보 (M열: row[12], N열: row[13])
+        const poOrderedQty = row[12];
+        const poRemainingQty = row[13];
+        const hasPOQty = poOrderedQty !== null && poOrderedQty !== "";
+
+        // PO 수량 표시 (PO가 있고 수량 정보가 있는 경우)
+        let poQtyDisplay = "-";
+        let remainingDisplay = "-";
+        if (hasPOQty) {
+          poQtyDisplay = poOrderedQty;
+          remainingDisplay = poRemainingQty !== null ? poRemainingQty : "-";
+        }
+
+        tableRows += "<tr>" +
+            "<td>" + escapeHtml(purchaseDate) + "</td>" +
+            "<td>" + escapeHtml(row[2]) + "</td>" +
+            "<td>" + escapeHtml(row[3]) + "</td>" +
+            "<td>" + escapeHtml(row[4]) + " " + escapeHtml(row[5]) + "</td>" +
+            "<td>" + poQtyDisplay + "</td>" +
+            "<td>" + remainingDisplay + "</td>" +
+            "<td>" + Number(row[6]).toLocaleString("en-US") + " VND</td>" +
+            "<td>" + Number(row[7]).toLocaleString("en-US") + " VND</td>" +
+            "<td>" + supplierName + "</td>" +
+            "<td>" + escapeHtml(row[9] || "-") + "</td>" +
+          "</tr>";
       });
     }
 
@@ -205,7 +218,9 @@ function getPurchaseHistoryPage() {
                     <th>구매일</th>
                     <th>아이템명</th>
                     <th>카테고리</th>
-                    <th>수량/단위</th>
+                    <th>입고수량</th>
+                    <th>PO수량</th>
+                    <th>미입고</th>
                     <th>단가</th>
                     <th>총액</th>
                     <th>공급사</th>
@@ -213,7 +228,7 @@ function getPurchaseHistoryPage() {
                 </tr>
             </thead>
             <tbody>
-                ${tableRows || "<tr><td colspan=\"8\" style=\"text-align:center;\">데이터가 없습니다.</td></tr>"}
+                ${tableRows || "<tr><td colspan=\"10\" style=\"text-align:center;\">데이터가 없습니다.</td></tr>"}
             </tbody>
         </table>
     `;
@@ -804,7 +819,28 @@ function addPurchaseEntry(formData) {
     // 2. 총액 계산
     const totalPrice = Number(formData.quantity) * Number(formData.unitPrice);
 
-    // 3. 시트에 추가할 데이터 행
+    // 3. PO 수량 정보 조회 (PO가 있는 경우)
+    let poOrderedQty = null;
+    let poRemainingQty = null;
+
+    if (formData.poId && formData.poId.trim() !== "") {
+      try {
+        const poData = getPOItemsForReceiving(formData.poId);
+        const itemIndex = formData.itemIndex !== "" ? Number(formData.itemIndex) : 0;
+        if (poData.items && poData.items[itemIndex]) {
+          const item = poData.items[itemIndex];
+          poOrderedQty = item.orderedQty;
+          // 이번 입고 후 남은 수량 계산
+          poRemainingQty = item.remainingQty - Number(formData.quantity);
+          if (poRemainingQty < 0) poRemainingQty = 0;
+        }
+      } catch (e) {
+        Logger.log(`PO 수량 정보 조회 실패: ${e.message}`);
+      }
+    }
+
+    // 4. 시트에 추가할 데이터 행
+    // 컬럼: A~L(기존) + M(POOrderedQty) + N(PORemainingQty)
     const newRow = [
       newId,
       new Date(formData.purchaseDate),
@@ -817,7 +853,9 @@ function addPurchaseEntry(formData) {
       formData.supplierId,
       formData.poId || null, // PO ID는 선택 사항
       null, // StatementID (초기엔 null)
-      new Date() // Timestamp
+      new Date(), // Timestamp
+      poOrderedQty, // M열: PO 주문 수량
+      poRemainingQty // N열: 미입고 수량
     ];
 
     sheet.appendRow(newRow);
