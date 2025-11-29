@@ -318,43 +318,103 @@ function filterTable(input) {
 
 // --- '구매 등록' 페이지 ---
 
+// PO 아이템 데이터 캐시
+let currentPOItemsData = null;
+
 function handlePOSelection(poId) {
+  const poItemsSection = document.getElementById("po-items-section");
+  const poItemsList = document.getElementById("po-items-list");
+  const qtyHint = document.getElementById("reg-qty-hint");
+
   if (!poId || poId.trim() === "") {
     // PO 선택 해제 시 폼 초기화
-    document.getElementById("reg-item").value = "";
-    document.getElementById("reg-category").value = "";
-    document.getElementById("reg-supplier").value = "";
-    document.getElementById("reg-qty").value = "1";
-    document.getElementById("reg-unit").value = "";
-    document.getElementById("reg-price").value = "";
-    document.getElementById("reg-total").value = "";
+    const regItem = document.getElementById("reg-item");
+    const regItemIndex = document.getElementById("reg-item-index");
+    const regCategory = document.getElementById("reg-category");
+    const regSupplier = document.getElementById("reg-supplier");
+    const regQty = document.getElementById("reg-qty");
+    const regUnit = document.getElementById("reg-unit");
+    const regPrice = document.getElementById("reg-price");
+    const regTotal = document.getElementById("reg-total");
+
+    if (regItem) regItem.value = "";
+    if (regItemIndex) regItemIndex.value = "";
+    if (regCategory) regCategory.value = "";
+    if (regSupplier) regSupplier.value = "";
+    if (regQty) regQty.value = "1";
+    if (regUnit) regUnit.value = "";
+    if (regPrice) regPrice.value = "";
+    if (regTotal) regTotal.value = "";
+    if (poItemsSection) poItemsSection.style.display = "none";
+    if (qtyHint) qtyHint.style.display = "none";
+    currentPOItemsData = null;
+    return;
+  }
+
+  // 필수 요소 존재 확인
+  if (!poItemsSection || !poItemsList) {
+    console.error("PO 아이템 섹션 요소를 찾을 수 없습니다.");
     return;
   }
 
   showSpinner();
   google.script.run
-    .withSuccessHandler(poDetails => {
+    .withSuccessHandler(poData => {
       hideSpinner();
+      currentPOItemsData = poData;
 
-      // PO의 첫 번째 아이템 정보로 폼 자동입력
-      if (poDetails.items && poDetails.items.length > 0) {
-        const firstItem = poDetails.items[0];
-        document.getElementById("reg-item").value = firstItem.name || "";
-        document.getElementById("reg-category").value = firstItem.category || "";
-        document.getElementById("reg-qty").value = firstItem.quantity || "1";
-        document.getElementById("reg-unit").value = firstItem.unit || "";
-        document.getElementById("reg-price").value = firstItem.unitPrice || "0";
+      if (poData.items && poData.items.length > 0) {
+        // PO 아이템 목록 표시
+        let itemsHtml = `
+          <table class="styled-table" style="width: 100%; font-size: 0.9em;">
+            <thead>
+              <tr>
+                <th>아이템명</th>
+                <th>주문</th>
+                <th>입고</th>
+                <th>잔여</th>
+                <th>단위</th>
+                <th>선택</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
 
-        // 총액 자동 계산
-        const qty = Number(firstItem.quantity) || 0;
-        const price = Number(firstItem.unitPrice) || 0;
-        document.getElementById("reg-total").value = qty * price;
+        poData.items.forEach((item, idx) => {
+          const isComplete = item.remainingQty <= 0;
+          const statusClass = isComplete ? "style=\"background: #e8f5e9; color: #388e3c;\"" : "";
+          const statusIcon = isComplete ? "✓" : "";
+          const actionCell = isComplete
+            ? "<span style=\"color: #388e3c;\">완료</span>"
+            : "<button type=\"button\" class=\"btn btn-primary btn-sm\" onclick=\"selectPOItem(" + idx + ")\">선택</button>";
+
+          itemsHtml += "<tr " + statusClass + ">" +
+              "<td>" + escapeHtml(item.name) + "</td>" +
+              "<td>" + item.orderedQty + "</td>" +
+              "<td>" + item.receivedQty + "</td>" +
+              "<td><strong>" + item.remainingQty + "</strong> " + statusIcon + "</td>" +
+              "<td>" + escapeHtml(item.unit) + "</td>" +
+              "<td>" + actionCell + "</td>" +
+            "</tr>";
+        });
+
+        itemsHtml += "</tbody></table>";
+        poItemsList.innerHTML = itemsHtml;
+        poItemsSection.style.display = "block";
 
         // 공급사 자동 선택
-        document.getElementById("reg-supplier").value = poDetails.supplierId || "";
+        const regSupplier = document.getElementById("reg-supplier");
+        if (regSupplier) regSupplier.value = poData.supplierId || "";
 
-        showAlert(`PO ${poId}의 첫 번째 아이템 정보가 자동 입력되었습니다.`);
+        // 잔여가 있는 첫 번째 아이템 자동 선택
+        const firstAvailable = poData.items.find(item => item.remainingQty > 0);
+        if (firstAvailable) {
+          selectPOItem(firstAvailable.index);
+        }
+
+        showAlert(`PO ${poId}의 아이템 목록을 불러왔습니다.`);
       } else {
+        if (poItemsSection) poItemsSection.style.display = "none";
         showAlert("이 PO에는 아이템 정보가 없습니다.", true);
       }
     })
@@ -362,13 +422,56 @@ function handlePOSelection(poId) {
       hideSpinner();
       showAlert(error.message, true);
     })
-    .getPODetails(poId);
+    .getPOItemsForReceiving(poId);
+}
+
+/**
+ * PO 아이템 선택 시 폼에 자동 입력
+ */
+function selectPOItem(index) {
+  if (!currentPOItemsData || !currentPOItemsData.items[index]) return;
+
+  const item = currentPOItemsData.items[index];
+
+  // 요소 가져오기
+  const regItemIndex = document.getElementById("reg-item-index");
+  const regItem = document.getElementById("reg-item");
+  const regCategory = document.getElementById("reg-category");
+  const regQty = document.getElementById("reg-qty");
+  const regUnit = document.getElementById("reg-unit");
+  const regPrice = document.getElementById("reg-price");
+  const regRemainingQty = document.getElementById("reg-remaining-qty");
+  const regQtyHint = document.getElementById("reg-qty-hint");
+  const regTotal = document.getElementById("reg-total");
+
+  // 값 설정 (null 체크)
+  if (regItemIndex) regItemIndex.value = index;
+  if (regItem) regItem.value = item.name || "";
+  if (regCategory) regCategory.value = item.category || "";
+  if (regQty) {
+    regQty.value = item.remainingQty;
+    regQty.max = item.remainingQty;
+  }
+  if (regUnit) regUnit.value = item.unit || "";
+  if (regPrice) regPrice.value = item.unitPrice || "0";
+
+  // 잔여 수량 힌트 표시
+  if (regRemainingQty) regRemainingQty.textContent = item.remainingQty;
+  if (regQtyHint) regQtyHint.style.display = "block";
+
+  // 총액 자동 계산
+  const qty = item.remainingQty;
+  const price = Number(item.unitPrice) || 0;
+  if (regTotal) regTotal.value = qty * price;
+
+  showAlert(`'${item.name}' 아이템이 선택되었습니다. (잔여: ${item.remainingQty}${item.unit})`);
 }
 
 function handlePurchaseFormSubmit(form) {
   showSpinner();
   const formData = {
     poId: form.poId.value,
+    itemIndex: form.itemIndex.value,  // PO 아이템 인덱스 (부분 입고용)
     itemName: form.itemName.value,
     category: form.category.value,
     supplierId: form.supplierId.value,

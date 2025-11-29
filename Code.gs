@@ -239,7 +239,8 @@ function getPurchaseRegisterPage() {
     const approvedPOs = getApprovedPOs();
     let poOptions = "<option value=\"\">-- PO 선택 (선택사항) --</option>";
     approvedPOs.forEach(po => {
-      poOptions += `<option value="${escapeHtml(po.id)}">${escapeHtml(po.id)} - ${escapeHtml(po.supplierName)} (${po.totalAmount.toLocaleString("en-US")} VND)</option>`;
+      const statusLabel = po.status === "부분 입고" ? " [부분입고]" : "";
+      poOptions += `<option value="${escapeHtml(po.id)}">${escapeHtml(po.id)} - ${escapeHtml(po.supplierName)} (${po.totalAmount.toLocaleString("en-US")} VND)${statusLabel}</option>`;
     });
 
     return `
@@ -252,6 +253,16 @@ function getPurchaseRegisterPage() {
                     ${poOptions}
                 </select>
             </div>
+
+            <!-- PO 아이템 목록 (PO 선택 시 표시) -->
+            <div id="po-items-section" style="display: none;" class="card mb-2">
+                <h5 style="margin-bottom: 10px;">📦 PO 아이템 입고 현황</h5>
+                <div id="po-items-list"></div>
+                <p style="font-size: 0.85em; color: #666; margin-top: 10px;">* 입고할 아이템을 선택하면 아래 폼에 자동 입력됩니다.</p>
+            </div>
+
+            <input type="hidden" id="reg-item-index" name="itemIndex" value="">
+
             <div class="form-group">
                 <label for="reg-item">아이템명</label>
                 <input type="text" id="reg-item" name="itemName" class="form-control" placeholder="예: A4 복사용지" required>
@@ -274,6 +285,7 @@ function getPurchaseRegisterPage() {
                 <div class="form-group">
                     <label for="reg-qty">수량</label>
                     <input type="number" id="reg-qty" name="quantity" class="form-control" value="1" required>
+                    <small id="reg-qty-hint" style="color: #666; display: none;">잔여: <span id="reg-remaining-qty">0</span></small>
                 </div>
                 <div class="form-group">
                     <label for="reg-unit">단위</label>
@@ -321,6 +333,7 @@ function getPOPage() {
         let statusClass = "";
 
         if (row[4] === "발주 승인") statusClass = "status-pending";
+        else if (row[4] === "부분 입고") statusClass = "status-partial";
         else if (row[4] === "입고 완료") statusClass = "status-completed";
         else if (row[4] === "취소") statusClass = "status-cancelled";
 
@@ -809,14 +822,15 @@ function addPurchaseEntry(formData) {
 
     sheet.appendRow(newRow);
 
-    // PO 번호가 있으면 해당 PO 상태를 "입고 완료"로 변경
+    // PO 번호가 있으면 해당 PO의 아이템 입고 수량 업데이트
     if (formData.poId && formData.poId.trim() !== "") {
       try {
-        updatePOStatus(formData.poId, "입고 완료");
-        Logger.log(`PO ${formData.poId} 상태를 '입고 완료'로 변경했습니다.`);
+        const itemIndex = formData.itemIndex !== "" ? Number(formData.itemIndex) : null;
+        updatePOItemReceived(formData.poId, itemIndex, Number(formData.quantity));
+        Logger.log(`PO ${formData.poId} 아이템 입고 수량이 업데이트되었습니다.`);
       } catch (e) {
-        Logger.log(`PO 상태 변경 실패 (계속 진행): ${e.message}`);
-        // PO 상태 변경 실패해도 구매 등록은 성공으로 처리
+        Logger.log(`PO 입고 수량 업데이트 실패 (계속 진행): ${e.message}`);
+        // PO 업데이트 실패해도 구매 등록은 성공으로 처리
       }
     }
 
@@ -1465,13 +1479,17 @@ function addPO(formData) {
     const sheet = getSheet(SHEET_NAMES.PO);
     const newId = getNextPOId(sheet);  // PO 전용 ID 생성 함수 사용
 
-    // 총액 계산
+    // 총액 계산 및 receivedQty 초기화
     let totalAmount = 0;
-    formData.items.forEach(item => {
+    const itemsWithReceived = formData.items.map(item => {
       totalAmount += (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+      return {
+        ...item,
+        receivedQty: 0  // 입고 수량 초기화
+      };
     });
 
-    const itemsJSON = JSON.stringify(formData.items);
+    const itemsJSON = JSON.stringify(itemsWithReceived);
 
     const newRow = [
       newId,
@@ -1519,8 +1537,80 @@ function updatePOStatus(poId, newStatus) {
 }
 
 /**
- * "발주 승인" 상태의 PO 목록을 가져옵니다.
- * @returns {Array} PO 목록 [{ id, supplierName, totalAmount }]
+ * PO 아이템의 입고 수량을 업데이트하고 PO 상태를 자동 변경합니다.
+ * @param {String} poId PO ID
+ * @param {Number|null} itemIndex 아이템 인덱스 (null이면 첫 번째 아이템)
+ * @param {Number} receivedQty 이번에 입고된 수량
+ * @returns {String} 성공 메시지
+ */
+function updatePOItemReceived(poId, itemIndex, receivedQty) {
+  try {
+    const sheet = getSheet(SHEET_NAMES.PO);
+    const data = sheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] == poId) {
+        // PO_ID, IssueDate, SupplierID, TotalAmount, Status, ItemsJSON, Notes
+        const itemsJSON = data[i][5];
+        let items = [];
+
+        try {
+          items = JSON.parse(itemsJSON);
+        } catch(e) {
+          Logger.log(`JSON 파싱 오류 (PO: ${poId}): ${e.message}`);
+          throw new Error("PO 아이템 데이터 파싱 실패");
+        }
+
+        // itemIndex가 null이거나 유효하지 않으면 0 사용
+        const targetIndex = (itemIndex !== null && itemIndex >= 0 && itemIndex < items.length)
+          ? itemIndex : 0;
+
+        // 해당 아이템의 receivedQty 업데이트
+        const currentReceived = Number(items[targetIndex].receivedQty) || 0;
+        items[targetIndex].receivedQty = currentReceived + receivedQty;
+
+        // 전체 입고 상태 확인
+        let allComplete = true;
+        let anyReceived = false;
+
+        items.forEach(item => {
+          const ordered = Number(item.quantity) || 0;
+          const received = Number(item.receivedQty) || 0;
+
+          if (received > 0) anyReceived = true;
+          if (received < ordered) allComplete = false;
+        });
+
+        // 상태 결정
+        let newStatus;
+        if (allComplete) {
+          newStatus = "입고 완료";
+        } else if (anyReceived) {
+          newStatus = "부분 입고";
+        } else {
+          newStatus = "발주 승인";
+        }
+
+        // ItemsJSON과 Status 업데이트 (F열=6, E열=5)
+        const updatedItemsJSON = JSON.stringify(items);
+        sheet.getRange(i + 1, 6).setValue(updatedItemsJSON);  // ItemsJSON
+        sheet.getRange(i + 1, 5).setValue(newStatus);  // Status
+
+        Logger.log(`PO ${poId} 아이템[${targetIndex}] 입고: ${receivedQty}, 새 상태: ${newStatus}`);
+        return `입고 수량 업데이트 완료. PO 상태: ${newStatus}`;
+      }
+    }
+
+    throw new Error(`PO '${poId}'를 찾을 수 없습니다.`);
+  } catch (e) {
+    Logger.log(`updatePOItemReceived 오류: ${e.message}`);
+    throw new Error(`PO 입고 수량 업데이트 실패: ${e.message}`);
+  }
+}
+
+/**
+ * 입고 가능한 PO 목록을 가져옵니다. ("발주 승인" 또는 "부분 입고" 상태)
+ * @returns {Array} PO 목록 [{ id, supplierName, totalAmount, status }]
  */
 function getApprovedPOs() {
   try {
@@ -1534,12 +1624,14 @@ function getApprovedPOs() {
       const supplierMap = getSupplierMap();
 
       data.forEach(row => {
-        if (row[4] === "발주 승인") {
+        // "발주 승인" 또는 "부분 입고" 상태의 PO만 포함
+        if (row[4] === "발주 승인" || row[4] === "부분 입고") {
           approvedPOs.push({
             id: row[0],
             supplierId: row[2],
             supplierName: supplierMap[row[2]] || row[2],
-            totalAmount: Number(row[3])
+            totalAmount: Number(row[3]),
+            status: row[4]
           });
         }
       });
@@ -1588,6 +1680,61 @@ function getPODetails(poId) {
   } catch (e) {
     Logger.log(`getPODetails 오류: ${e.message}`);
     throw new Error(`PO 상세 정보 로드 실패: ${e.message}`);
+  }
+}
+
+/**
+ * 입고 등록용 PO 아이템 목록을 가져옵니다 (잔여 수량 포함).
+ * @param {String} poId PO ID
+ * @returns {Object} { poId, supplierId, status, items: [...] }
+ */
+function getPOItemsForReceiving(poId) {
+  try {
+    const sheet = getSheet(SHEET_NAMES.PO);
+    const data = sheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] == poId) {
+        // PO_ID, IssueDate, SupplierID, TotalAmount, Status, ItemsJSON, Notes
+        const itemsJSON = data[i][5];
+        let items = [];
+
+        try {
+          const parsedItems = JSON.parse(itemsJSON);
+          items = parsedItems.map((item, index) => {
+            const orderedQty = Number(item.quantity) || 0;
+            const receivedQty = Number(item.receivedQty) || 0;
+            const remainingQty = orderedQty - receivedQty;
+
+            return {
+              index: index,
+              name: item.name,
+              category: item.category,
+              orderedQty: orderedQty,
+              receivedQty: receivedQty,
+              remainingQty: remainingQty,
+              unit: item.unit,
+              unitPrice: Number(item.unitPrice) || 0
+            };
+          });
+        } catch(e) {
+          Logger.log(`JSON 파싱 오류 (PO: ${poId}): ${e.message}`);
+          items = [];
+        }
+
+        return {
+          poId: data[i][0],
+          supplierId: data[i][2],
+          status: data[i][4],
+          items: items
+        };
+      }
+    }
+
+    throw new Error(`PO '${poId}'를 찾을 수 없습니다.`);
+  } catch (e) {
+    Logger.log(`getPOItemsForReceiving 오류: ${e.message}`);
+    throw new Error(`PO 아이템 목록 로드 실패: ${e.message}`);
   }
 }
 
